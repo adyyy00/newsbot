@@ -37,9 +37,27 @@ class WebScraperBot:
             print(f"❌ Error fetching page: {e}")
             return None
     
+    def get_content_root(self, soup):
+        """Return the main content container if available, otherwise the full page."""
+        selectors = [
+            {'name': 'main'},
+            {'name': 'div', 'attrs': {'id': 'content'}},
+            {'name': 'div', 'attrs': {'id': 'main'}},
+            {'name': 'article'},
+            {'name': 'section', 'attrs': {'class': re.compile(r'\b(main|content|article)\b', re.I)}},
+            {'name': 'div', 'attrs': {'class': re.compile(r'\b(main|content|article)\b', re.I)}}
+        ]
+        for selector in selectors:
+            root = soup.find(**selector)
+            if root and root.get_text(strip=True):
+                return root
+        return soup
+    
     def extract_text_content(self, soup):
         """Extract all text content in sequence"""
         print("📝 Extracting text content...")
+        
+        content_root = self.get_content_root(soup)
         
         # Get page title
         self.content['title'] = soup.title.string.strip() if soup.title else "No title"
@@ -52,20 +70,20 @@ class WebScraperBot:
                 self.content['meta_info'][meta['property']] = meta.get('content', '')
         
         # Extract headings in order
-        for heading in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
+        for heading in content_root.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
             self.content['headings'].append({
                 'level': heading.name,
                 'text': heading.get_text(strip=True)
             })
         
         # Extract paragraphs
-        for para in soup.find_all('p'):
+        for para in content_root.find_all('p'):
             text = para.get_text(strip=True)
             if text:  # Only add non-empty paragraphs
                 self.content['paragraphs'].append(text)
         
         # Extract lists
-        for list_elem in soup.find_all(['ul', 'ol']):
+        for list_elem in content_root.find_all(['ul', 'ol']):
             list_items = []
             for item in list_elem.find_all('li'):
                 list_items.append(item.get_text(strip=True))
@@ -101,8 +119,9 @@ class WebScraperBot:
     def extract_images(self, soup):
         """Extract all images with sources"""
         print("🖼️  Extracting images...")
+        content_root = self.get_content_root(soup)
         
-        for img in soup.find_all('img'):
+        for img in content_root.find_all('img'):
             img_src = img.get('src') or img.get('data-src')
             if img_src:
                 full_url = urljoin(self.url, img_src)
@@ -115,9 +134,13 @@ class WebScraperBot:
     def extract_links(self, soup):
         """Extract all links with their text"""
         print("🔗 Extracting links...")
+        content_root = self.get_content_root(soup)
         
-        for link in soup.find_all('a', href=True):
-            full_url = urljoin(self.url, link['href'])
+        for link in content_root.find_all('a', href=True):
+            href = link['href'].strip()
+            if not href or href.startswith(('javascript:', '#', 'mailto:')):
+                continue
+            full_url = urljoin(self.url, href)
             self.content['links'].append({
                 'url': full_url,
                 'text': link.get_text(strip=True),
