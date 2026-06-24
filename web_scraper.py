@@ -18,12 +18,7 @@ class WebScraperBot:
             'url': url,
             'scraped_at': datetime.now().isoformat(),
             'title': '',
-            'headings': [],
-            'paragraphs': [],
-            'images': [],
-            'links': [],
-            'lists': [],
-            'tables': [],
+            'sections': [],
             'meta_info': {}
         }
     
@@ -69,52 +64,71 @@ class WebScraperBot:
             elif meta.get('property'):
                 self.content['meta_info'][meta['property']] = meta.get('content', '')
         
-        # Extract headings in order
-        for heading in content_root.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6']):
-            self.content['headings'].append({
-                'level': heading.name,
-                'text': heading.get_text(strip=True)
-            })
+        # Build sections from page elements in document order
+        section = {
+            'heading': {'level': 'h0', 'text': 'Introduction'},
+            'content': []
+        }
+        self.content['sections'].append(section)
         
-        # Extract paragraphs
-        for para in content_root.find_all('p'):
-            text = para.get_text(strip=True)
-            if text:  # Only add non-empty paragraphs
-                self.content['paragraphs'].append(text)
-        
-        # Extract lists
-        for list_elem in content_root.find_all(['ul', 'ol']):
-            list_items = []
-            for item in list_elem.find_all('li'):
-                list_items.append(item.get_text(strip=True))
-            if list_items:
-                self.content['lists'].append({
-                    'type': list_elem.name,
-                    'items': list_items
-                })
-        
-        # Extract tables
-        for table in soup.find_all('table'):
-            table_data = []
-            headers = []
+        for element in content_root.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'table', 'img', 'a'], recursive=True):
+            if element.name in ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']:
+                section = {
+                    'heading': {
+                        'level': element.name,
+                        'text': element.get_text(strip=True)
+                    },
+                    'content': []
+                }
+                self.content['sections'].append(section)
+                continue
             
-            # Get headers
-            for th in table.find_all('th'):
-                headers.append(th.get_text(strip=True))
+            if element.name == 'p':
+                text = element.get_text(strip=True)
+                if text:
+                    section['content'].append({'type': 'paragraph', 'text': text})
+                continue
             
-            # Get rows
-            for row in table.find_all('tr'):
-                row_data = []
-                for cell in row.find_all(['td', 'th']):
-                    row_data.append(cell.get_text(strip=True))
-                if row_data:
-                    table_data.append(row_data)
+            if element.name in ['ul', 'ol']:
+                items = [li.get_text(strip=True) for li in element.find_all('li') if li.get_text(strip=True)]
+                if items:
+                    section['content'].append({'type': 'list', 'list_type': element.name, 'items': items})
+                continue
             
-            if table_data:
-                self.content['tables'].append({
-                    'headers': headers,
-                    'data': table_data
-                })
+            if element.name == 'table':
+                headers = [th.get_text(strip=True) for th in element.find_all('th')]
+                rows = []
+                for row in element.find_all('tr'):
+                    cells = [cell.get_text(strip=True) for cell in row.find_all(['td', 'th'])]
+                    if cells:
+                        rows.append(cells)
+                if rows:
+                    section['content'].append({'type': 'table', 'headers': headers, 'rows': rows})
+                continue
+            
+            if element.name == 'img':
+                img_src = element.get('src') or element.get('data-src')
+                if img_src:
+                    section['content'].append({
+                        'type': 'image',
+                        'url': urljoin(self.url, img_src),
+                        'alt_text': element.get('alt', ''),
+                        'title': element.get('title', '')
+                    })
+                continue
+            
+            if element.name == 'a':
+                href = element.get('href')
+                if href:
+                    href = href.strip()
+                    if href and not href.startswith(('javascript:', '#', 'mailto:')):
+                        section['content'].append({
+                            'type': 'link',
+                            'url': urljoin(self.url, href),
+                            'text': element.get_text(strip=True),
+                            'title': element.get('title', '')
+                        })
+                continue
     
     def extract_images(self, soup):
         """Extract all images with sources"""
@@ -177,55 +191,44 @@ class WebScraperBot:
             for key, value in self.content['meta_info'].items():
                 f.write(f"{key}: {value}\n")
             
-            # Headings structure
-            f.write("\n📑 HEADINGS:\n")
-            f.write("-" * 40 + "\n")
-            for heading in self.content['headings']:
-                indent = "  " * (int(heading['level'][1]) - 1)
-                f.write(f"{indent}[{heading['level'].upper()}] {heading['text']}\n")
-            
-            # Main content
-            f.write("\n📝 MAIN CONTENT:\n")
-            f.write("-" * 40 + "\n")
-            for i, para in enumerate(self.content['paragraphs'], 1):
-                f.write(f"\n[{i}] {para}\n")
-            
-            # Lists
-            if self.content['lists']:
-                f.write("\n📋 LISTS:\n")
-                f.write("-" * 40 + "\n")
-                for list_data in self.content['lists']:
-                    f.write(f"\nList type: {list_data['type']}\n")
-                    for i, item in enumerate(list_data['items'], 1):
-                        f.write(f"  {i}. {item}\n")
-            
-            # Tables
-            if self.content['tables']:
-                f.write("\n📊 TABLES:\n")
-                f.write("-" * 40 + "\n")
-                for table in self.content['tables']:
-                    if table['headers']:
-                        f.write(" | ".join(table['headers']) + "\n")
-                        f.write("-" * 50 + "\n")
-                    for row in table['data']:
-                        f.write(" | ".join(row) + "\n")
-            
-            # Images
-            f.write("\n🖼️  IMAGES:\n")
-            f.write("-" * 40 + "\n")
-            for i, img in enumerate(self.content['images'], 1):
-                f.write(f"\n{i}. URL: {img['url']}\n")
-                f.write(f"   Alt Text: {img['alt_text']}\n")
-                f.write(f"   Title: {img['title']}\n")
-            
-            # Links
-            f.write("\n🔗 LINKS:\n")
-            f.write("-" * 40 + "\n")
-            for i, link in enumerate(self.content['links'], 1):
-                f.write(f"\n{i}. {link['text']}\n")
-                f.write(f"   URL: {link['url']}\n")
-                if link['title']:
-                    f.write(f"   Title: {link['title']}\n")
+            # Sections with content under headings
+            f.write("\n📑 SECTIONS:\n")
+            f.write("-" * 80 + "\n")
+            for section in self.content['sections']:
+                heading = section['heading']
+                if heading['level'] == 'h0':
+                    f.write("\nINTRODUCTION:\n")
+                else:
+                    indent = "  " * (int(heading['level'][1]) - 1)
+                    f.write(f"\n{indent}[{heading['level'].upper()}] {heading['text']}:\n")
+                f.write("-" * 60 + "\n")
+
+                if not section['content']:
+                    f.write("(No content found under this heading)\n")
+                for item in section['content']:
+                    if item['type'] == 'paragraph':
+                        f.write(f"\n{item['text']}\n")
+                    elif item['type'] == 'list':
+                        f.write(f"\nList ({item['list_type']}):\n")
+                        for idx, list_item in enumerate(item['items'], 1):
+                            f.write(f"  {idx}. {list_item}\n")
+                    elif item['type'] == 'table':
+                        if item['headers']:
+                            f.write("\n" + " | ".join(item['headers']) + "\n")
+                            f.write("-" * 50 + "\n")
+                        for row in item['rows']:
+                            f.write(" | ".join(row) + "\n")
+                    elif item['type'] == 'image':
+                        f.write(f"\nImage URL: {item['url']}\n")
+                        f.write(f"Alt Text: {item['alt_text']}\n")
+                        if item['title']:
+                            f.write(f"Title: {item['title']}\n")
+                    elif item['type'] == 'link':
+                        f.write(f"\nLink: {item['text']}\n")
+                        f.write(f"URL: {item['url']}\n")
+                        if item['title']:
+                            f.write(f"Title: {item['title']}\n")
+                f.write("\n" + "=" * 80 + "\n")
         
         print(f"✅ Text file saved successfully to {filename}")
     
@@ -241,8 +244,6 @@ class WebScraperBot:
         
         # Extract all content
         self.extract_text_content(soup)
-        self.extract_images(soup)
-        self.extract_links(soup)
         
         # Create output directory
         output_dir = "scraped_data"
@@ -263,12 +264,12 @@ class WebScraperBot:
         print("📊 EXTRACTION SUMMARY")
         print("=" * 50)
         print(f"📌 Title: {self.content['title']}")
-        print(f"📑 Headings: {len(self.content['headings'])}")
-        print(f"📝 Paragraphs: {len(self.content['paragraphs'])}")
-        print(f"🖼️  Images: {len(self.content['images'])}")
-        print(f"🔗 Links: {len(self.content['links'])}")
-        print(f"📋 Lists: {len(self.content['lists'])}")
-        print(f"📊 Tables: {len(self.content['tables'])}")
+        print(f"📑 Sections: {len(self.content['sections'])}")
+        print(f"📝 Paragraphs: {sum(1 for s in self.content['sections'] for item in s['content'] if item['type'] == 'paragraph')}")
+        print(f"🖼️  Images: {sum(1 for s in self.content['sections'] for item in s['content'] if item['type'] == 'image')}")
+        print(f"🔗 Links: {sum(1 for s in self.content['sections'] for item in s['content'] if item['type'] == 'link')}")
+        print(f"📋 Lists: {sum(1 for s in self.content['sections'] for item in s['content'] if item['type'] == 'list')}")
+        print(f"📊 Tables: {sum(1 for s in self.content['sections'] for item in s['content'] if item['type'] == 'table')}")
         print(f"\n💾 Files saved in '{output_dir}' directory")
         return True
 
